@@ -29,8 +29,8 @@ mcat [-o|-a] [-d] [-f] [-i] <file>
 Options:  
   -o          Overwrite the file (default)  
   -a          Append to the file  
-  -d          Show unified diff preview before overwriting + ask to confirm (only in overwrite mode)  
-  -f          Force — skip confirmation even when -d is used  
+  -d          Show diff preview before overwriting + prompt to confirm (only in overwrite mode)  
+  -f          Force — skip confirmation prompt even when -d is used  
   -i          Preserve original file permissions when overwriting  
   -h          Show help
 
