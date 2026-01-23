@@ -1,28 +1,23 @@
 #!/usr/bin/env bash
 # mcat — safe cat >|>> file with mkdir -p + optional diff preview + prompt
-
 set -euo pipefail
-
 mode="overwrite"
 show_diff=false
 force=false
 preserve_mode=false
-
 usage() {
     cat >&2 <<'EOF'
 Usage: mcat [-o|-a] [-d] [-f] [-i] <file>
-
 Options:
   -o    Overwrite the file (default)
   -a    Append to the file
   -d    Show diff preview before overwriting + prompt for confirmation (overwrite only)
   -f    Force: skip confirmation prompt even with -d
-  -i    Preserve original file permissions (overwrite only)
+  -i    Preserve original file permissions (works for both overwrite and append)
   -h    Show help
 EOF
     exit 2
 }
-
 while getopts ":oadfih" opt; do
     case $opt in
         o) mode="overwrite" ;;
@@ -34,40 +29,43 @@ while getopts ":oadfih" opt; do
         \?) echo "Unknown option: -$OPTARG" >&2; usage ;;
     esac
 done
-
 shift $((OPTIND-1))
-
 [[ $# -ne 1 ]] && { echo "Exactly one file argument required." >&2; usage; }
-
 file="$1"
 dir=$(dirname -- "$file")
-
 [[ -d "$dir" ]] || mkdir -p -- "$dir" || { echo "Failed to create $dir" >&2; exit 1; }
-
 tmpfile=$(mktemp --tmpdir="$dir" ".mcat.XXXXXXXXXX") || { echo "Failed to create temp file" >&2; exit 1; }
-
 trap 'rm -f -- "$tmpfile"' EXIT INT TERM HUP
-
+# Make temp file readable by default (most users expect new/updated files to be at least 0644-ish)
+chmod 0666 "$tmpfile" 2>/dev/null || true
 if [[ $mode == "append" ]]; then
     [[ -f "$file" ]] && cp -- "$file" "$tmpfile" || true
     cat >> "$tmpfile" || { echo "Append failed" >&2; exit 1; }
 else
     cat > "$tmpfile" || { echo "Write failed" >&2; exit 1; }
 fi
-
+# Apply preserved permissions if requested (now works for both modes)
+if $preserve_mode && [[ -f "$file" ]]; then
+    mode_str=$(stat -c %a "$file" 2>/dev/null || echo "0644")
+    chmod "$mode_str" "$tmpfile" || true
+fi
 if $show_diff && [[ $mode == "overwrite" ]]; then
     if [[ -f "$file" ]]; then
-        echo "─── Diff preview: ${file}  ←  new content ───" >&2
-        if command -v colordiff >/dev/null 2>&1; then
-            colordiff -u -- "$file" "$tmpfile" >&2 || true
+        # Check if there are differences first
+        if diff -q -- "$file" "$tmpfile" >/dev/null 2>&1; then
+            echo "─── No changes detected ───" >&2
         else
-            diff -u -- "$file" "$tmpfile" >&2 || true
+            echo "─── Diff preview: ${file}  ←  new content ───" >&2
+            if command -v colordiff >/dev/null 2>&1; then
+                colordiff -u -- "$file" "$tmpfile" >&2 || true
+            else
+                diff -u -- "$file" "$tmpfile" >&2 || true
+            fi
+            echo "──────────────────────────────────────" >&2
         fi
-        echo "──────────────────────────────────────" >&2
     else
         echo "Note: Creating new file (no diff)." >&2
     fi
-
     if [[ -t 0 ]] && ! $force; then
         read -r -p "Apply changes? [Y/n] " answer < /dev/tty
         case "${answer:-Y}" in
@@ -76,12 +74,11 @@ if $show_diff && [[ $mode == "overwrite" ]]; then
         esac
     fi
 fi
-
+# Final move
 if [[ $mode == "append" ]] || ! $preserve_mode || [[ ! -f "$file" ]]; then
     mv -- "$tmpfile" "$file" || { echo "Move failed" >&2; exit 1; }
 else
-    mode_str=$(stat -c %a "$file" 2>/dev/null || echo "0666")
-    install -m "$mode_str" -- "$tmpfile" "$file" || mv -- "$tmpfile" "$file" || { echo "Install/move failed" >&2; exit 1; }
+    # We already chmod'ed above when preserve_mode is on → just mv
+    mv -- "$tmpfile" "$file" || { echo "Move failed" >&2; exit 1; }
 fi
-
 exit 0
